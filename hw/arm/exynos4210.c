@@ -29,6 +29,7 @@
 #include "hw/cpu/a9mpcore.h"
 #include "hw/boards.h"
 #include "sysemu/sysemu.h"
+#include "qemu/error-report.h"
 #include "hw/sysbus.h"
 #include "hw/arm/arm.h"
 #include "hw/loader.h"
@@ -38,6 +39,9 @@
 
 #define EXYNOS4210_CHIPID_ADDR         0x10000000
 
+/* OTP */
+#define EXYNOS4210_OTP_BASE_ADDR		0x10100000
+
 /* PWM */
 #define EXYNOS4210_PWM_BASE_ADDR       0x139D0000
 
@@ -46,6 +50,9 @@
 
 /* MCT */
 #define EXYNOS4210_MCT_BASE_ADDR       0x10050000
+
+/* ACE */
+#define EXYNOS4210_ACE_BASE_ADDR       0x10830000
 
 /* I2C */
 #define EXYNOS4210_I2C_SHIFT           0x00010000
@@ -97,13 +104,16 @@
 #define EXYNOS4210_EHCI_BASE_ADDR           0x12580000
 
 static uint8_t chipid_and_omr[] = { 0x11, 0x02, 0x21, 0x43,
-                                    0x09, 0x00, 0x00, 0x00 };
+                                    0x09, 0x00, 0x00, 0x00,
+                                    0x00, 0x00, 0x20, 0x00 };
 
 static uint64_t exynos4210_chipid_and_omr_read(void *opaque, hwaddr offset,
                                                unsigned size)
 {
-    assert(offset < sizeof(chipid_and_omr));
-    return chipid_and_omr[offset];
+	uint64_t ret;
+	assert(offset + size <= sizeof(chipid_and_omr));
+	memcpy(&ret, &chipid_and_omr[offset], size);
+	return ret;
 }
 
 static void exynos4210_chipid_and_omr_write(void *opaque, hwaddr offset,
@@ -117,7 +127,8 @@ static const MemoryRegionOps exynos4210_chipid_and_omr_ops = {
     .write = exynos4210_chipid_and_omr_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
     .impl = {
-        .max_access_size = 1,
+		.min_access_size = 1,
+		.max_access_size = 4,
     }
 };
 
@@ -171,6 +182,30 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem)
     SysBusDevice *busdev;
     DeviceState *dev;
     int i, n;
+
+    if (bios_name) {
+        char *fn;
+        int image_size;
+
+        if (drive_get(IF_PFLASH, 0, 0)) {
+            error_report("The contents of the first flash device may be "
+                         "specified with -bios or with -drive if=pflash... "
+                         "but you cannot use both options at once");
+            exit(1);
+        }
+        fn = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
+        if (!fn) {
+            error_report("Could not find ROM image '%s'", bios_name);
+            exit(1);
+        }
+        image_size = load_image_targphys(fn, EXYNOS4210_IROM_BASE_ADDR,
+                                         EXYNOS4210_IROM_SIZE);
+        g_free(fn);
+        if (image_size < 0) {
+            error_report("Could not load ROM image '%s'", bios_name);
+            exit(1);
+        }
+    }
 
     for (n = 0; n < EXYNOS4210_NCPUS; n++) {
         Object *cpuobj = object_new(ARM_CPU_TYPE_NAME("cortex-a9"));
@@ -273,6 +308,8 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem)
         NULL, "exynos4210.chipid", sizeof(chipid_and_omr));
     memory_region_add_subregion(system_mem, EXYNOS4210_CHIPID_ADDR,
                                 &s->chipid_mem);
+    /* OTP Memory (fuses) */
+	sysbus_create_simple("exynos4210.otp", EXYNOS4210_OTP_BASE_ADDR, NULL);
 
     /* Internal ROM */
     memory_region_init_ram(&s->irom_mem, NULL, "exynos4210.irom",
@@ -303,6 +340,7 @@ Exynos4210State *exynos4210_init(MemoryRegion *system_mem)
 
     sysbus_create_simple("exynos4210.clk", EXYNOS4210_CLK_BASE_ADDR, NULL);
     sysbus_create_simple("exynos4210.rng", EXYNOS4210_RNG_BASE_ADDR, NULL);
+    sysbus_create_simple("exynos4210.ace", EXYNOS4210_ACE_BASE_ADDR, NULL);
 
     /* PWM */
     sysbus_create_varargs("exynos4210.pwm", EXYNOS4210_PWM_BASE_ADDR,

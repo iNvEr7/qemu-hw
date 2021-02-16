@@ -41,7 +41,7 @@
 #include "qemu/timer.h"
 #include "qemu/log.h"
 
-//#define DEBUG_SD 1
+#define DEBUG_SD 1
 
 #ifdef DEBUG_SD
 #define DPRINTF(fmt, ...) \
@@ -1407,7 +1407,8 @@ static sd_rsp_type_t sd_app_command(SDState *sd,
             }
 
             return sd_r3;
-
+        case sd_ready_state:
+			return sd_r3;
         default:
             break;
         }
